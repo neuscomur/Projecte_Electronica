@@ -1,2 +1,2 @@
-# Projecte-ProPro
-Projecte ProPro
+# Projecte Electrònica
+Projecte Electrònica
