@@ -1,0 +1,83 @@
+import asyncio
+import matplotlib.pyplot as plt
+from bleak import BleakClient, BleakError
+import struct
+
+# Define UUIDs for the service and characteristic
+SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+CHARACTERISTIC_UUID = "7a6ffc80-ef27-4a4d-a8a6-56d93f8feff3"
+
+# Replace with your ESP32 device name or address
+DEVICE_NAME = "ESP32-NeusMar"
+ADRESS = "84:CC:A8:37:9B:62"
+
+# Variables globales
+window_size = 100  # Tamaño máximo de la ventana de datos
+resp_values = []  # Lista para la señal de respiración
+ecg_values = []  # Lista para la señal de ECG
+
+def callback(sender, data):
+    try:
+        print(data)
+        # Desempaquetar dos valores flotantes (ECG y respiración) desde los datos recibidos
+        line = readline().decode().strip()#les dades estan separades per , entre si i hi ha resp, ecg, pns, sns i stress
+        
+        print(f"ECG: {ecg}, Resp: {resp}")
+
+        # Agregar los valores a las listas respectivas
+        ecg_values.append(ecg)
+        resp_values.append(resp)
+
+
+        # Graficar las señales
+        plt.clf()  # Limpiar la figura actual
+
+        # Graficar la señal ECG
+        plt.subplot(2, 1, 1)
+        plt.plot(ecg_values, label="ECG Signal", color="blue")
+        plt.xlabel("Muestras")
+        plt.ylabel("ECG (mV)")
+        plt.title("Señal de ECG")
+        plt.legend()
+        plt.grid()
+
+        # Graficar la señal de respiración
+        plt.subplot(2, 1, 2)
+        plt.plot(resp_values, label="Respiration Signal", color="orange")
+        plt.xlabel("Muestras")
+        plt.ylabel("Respiración (mV)")
+        plt.title("Señal de respiración")
+        plt.legend()
+        plt.grid()
+
+        #he de fer lo del pop
+
+        plt.tight_layout()
+        plt.pause(0.1)  # Pausa para actualizar la gráfica
+
+    except struct.error as e:
+        print(f"Error al desempaquetar datos: {e}") #Error al desempaquetar datos: unpack requires a buffer of 8 bytes
+        #no està llegint bé les dades revisar codi
+    except Exception as ex:
+        print(f"Error general: {ex}")
+
+
+#tot això és igual que la pràctica, en teoria ha d'anar bé però revisar si funciona per dos senyals
+
+async def run():
+    try:
+        async with BleakClient(ADRESS) as client:
+            print("Connectat")
+            await client.start_notify(CHARACTERISTIC_UUID, callback)
+            while True:
+                await asyncio.sleep(1)
+    except BleakError as e:
+        print(f"Error rebuda: {e}")
+
+if __name__ == "__main__":
+
+    print("Iniciant programa")
+    dades = []
+    window_size = 10
+
+    asyncio.run(run())
