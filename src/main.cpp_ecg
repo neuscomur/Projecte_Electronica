@@ -1,0 +1,130 @@
+///Codi per simular un senyal ECG
+#include <Arduino.h>
+
+#define BAUD_RATIO 115200
+
+// Constants per simular l'ECG
+const float fs = 500.0;  // Frequència de mostreig (500 Hz)
+const float duration = 10.0; // Durada en segons
+const float heart_rate = 60.0;  // Ritme cardíac en BPM (bats per minut)
+
+// Paràmetres de la forma de l'ECG
+const float P_amp = 0.1;   // Amplitud de l'ona P
+const float QRS_amp = 1.0; // Amplitud del complex QRS
+const float T_amp = 0.3;   // Amplitud de l'ona T
+
+const float P_duration = 0.1;   // Durada de l'ona P (en segons)
+const float QRS_duration = 0.1; // Durada del complex QRS (en segons)
+const float T_duration = 0.2;   // Durada de l'ona T (en segons)
+
+// Temps i càlculs de les mostres
+float temps = 0.0;
+float dt = 1.0 / fs;
+float rr_interval = 60.0 / heart_rate;  // Interval RR en segons
+float rr_variability = 0.05;  // Variabilitat en el temps RR (5% de variació)
+
+// Funció per generar una ona gaussiana per a les onades P, QRS i T
+float gaussian_wave(float t, float amplitude, float duration) {
+  return amplitude * exp(-0.5 * pow(t / (duration / 2.0), 2));
+}
+
+// Funció per simular el complex QRS amb una part negativa (Q i S)
+float qrs_wave_with_negatives(float t, float amplitude, float duration) {
+  // El complex QRS té una part negativa (Q i S)
+  float positive_peak = gaussian_wave(t, amplitude, duration / 2.0);  // Paret positiva
+  float negative_peak = gaussian_wave(t - duration / 2.0, -amplitude / 2.0, duration / 2.0); // Part negativa (Q i S)
+  
+  return positive_peak + negative_peak;
+}
+
+float obtenir_pic_R(float* senyal, int mida){
+
+  int comptador = 0; //Comptador de quants pics trobem
+  float pics_R[10] = {0};
+
+  //bucle per trobar màxims
+  for (int i = 1; i < mida - 1; i++) {
+    if (senyal[i] > senyal[i - 1] && senyal[i] > senyal[i + 1]) {
+      pics_R[comptador] = senyal[i];
+      comptador++;
+    }
+  }
+
+  //Obtenir pic màxim del senyal
+  float pic_max = pics_R[0];
+  for (int i = 1; i < comptador; i++) {
+    if (pics_R[i] > pic_max) {
+      pic_max = pics_R[i];
+    }
+  }
+  return pic_max;
+}
+
+
+void setup() {
+  // Inicialització de la comunicació sèrie
+  Serial.begin(BAUD_RATIO);
+  delay(1000);
+  
+  // Inicialitzar la funció random
+  randomSeed(analogRead(0));  // Alimentem el generador de números aleatoris
+}
+
+// Declarem variables necessàries per a guardar els valors ecg
+int num_punts = 0;
+float array_ecg_signal[1000];
+
+void loop() {
+  // Calcular el senyal ECG com la suma de les onades P, QRS i T
+  float p_wave = 0.0;
+  float qrs_wave = 0.0;
+  float t_wave = 0.0;
+
+  // Assignar les onades al cicle del cor (P, QRS, T)
+  // Ona P - Apareix abans del QRS
+  if (temps < P_duration) {
+    p_wave = gaussian_wave(temps, P_amp, P_duration);
+  }
+
+  // Complex QRS amb part negativa (Q i S)
+  if (temps >= P_duration && temps < P_duration + QRS_duration) {
+    qrs_wave = qrs_wave_with_negatives(temps - P_duration, QRS_amp, QRS_duration);
+  }
+
+  // Ona T - Apareix després del QRS
+  if (temps >= P_duration + QRS_duration && temps < P_duration + QRS_duration + T_duration) {
+    t_wave = gaussian_wave(temps - P_duration - QRS_duration, T_amp, T_duration);
+  }
+
+  // Senyal ECG com a suma de les onades P, QRS i T
+  float ecg_signal = p_wave + qrs_wave + t_wave;
+
+  // Mostrar el senyal ECG pel monitor sèrie
+  Serial.println(ecg_signal);
+
+  // Incrementar el temps per al següent mostreig
+  temps += dt;
+
+  // Afegir variabilitat al interval RR, ajustant el temps entre batecs
+  rr_interval = 60.0 / heart_rate * (1 + random(-rr_variability * 100, rr_variability * 100) / 100.0);
+
+  // Reiniciar el temps després d'un batec complet
+  if (temps >= rr_interval) {
+    temps = 0.0;
+  }
+
+  //--------------------------------------------------------------------------
+
+  // obtenir pic de la ona R
+  array_ecg_signal[num_punts] = ecg_signal;
+  num_punts++;
+
+  if(num_punts > 500){
+    float pic_R = obtenir_pic_R(array_ecg_signal, 500); 
+    //Serial.println(pic_R);  // Utilitzem 'println' per saltar de línia després de imprimir el valor
+    num_punts = 0;
+  }
+
+  // Retard per ajustar la freqüència de mostreig
+  delay(1000 / fs);
+}
