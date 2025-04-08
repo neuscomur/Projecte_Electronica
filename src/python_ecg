@@ -1,0 +1,32 @@
+import serial
+import matplotlib.pyplot as plt
+
+print("Iniciant programa")
+ser = serial.Serial('COM3', 115200)
+dades = []
+window_size = 1000
+
+while True:
+    try:
+        line = ser.readline().decode().strip()
+    except Exception as e:
+        print(f"Error llegint per serial:\n{e}")
+    try:
+        dada = float(line)
+        dades.append(dada)
+        plt.clf()
+        plt.plot(dades)
+
+        if len(dades) > window_size:
+            dades.pop(0)
+
+        plt.xlabel('X')
+        plt.ylabel('Valor Y')
+        plt.title('Gràfic de les dades del port COM')
+        plt.ylim(-1.2, 1.2)
+        plt.draw()
+        plt.pause(0.001)
+        print("Última dada enviada: ", dada)
+    
+    except ValueError:
+        break
