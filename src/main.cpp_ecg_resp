@@ -1,0 +1,226 @@
+
+#include <Arduino.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
+#include <BLE2902.h>
+
+#define SERVICE_UUID        "4cbd1aa2-2e2b-4a51-9be0-a577dcf27eec"
+#define CHARACTERISTIC_UUID "7a6ffc80-ef27-4a4d-a8a6-56d93f8feff3"
+#define BUFFER_SIZE 50
+#define SAMPLING_RATE 500
+
+#define MAX_CHUNK_SIZE 20
+
+unsigned long lastPeriod = micros();
+
+//u_int16_t samplingTime =(1/SAMPLING_RATE)*1000000;  // temps de mostreig en milisegons
+unsigned long samplingTime =2000; //microsegons
+u_int32_t nsamples = 0; // compta el numero de mostres
+//const int bufferSize = 50; 
+
+unsigned long last_sns_time = 0;
+float ecg_buffer[BUFFER_SIZE]; //buffer que emmagatzemarà les BUFFER_SIZE mostres d'ECG 
+float resp_buffer[BUFFER_SIZE];//buffer que emmagatzemarà les BUFFER_SIZE mostres de respiracio
+String data = ""; // string que conté les BUFFER_SIZE mostres d'ECG, respiració, SNS, PNS ibuffer SS, separats per comes i amb 2 decimals cadascú
+
+// Constants per simular l'ECG
+const float fs = 500.0;  // Frequència de mostreig (500 Hz)
+const float duration = 10.0; // Durada en segons
+const float heart_rate = 60.0;  // Ritme cardíac en BPM (batecs per minut)
+
+// inicialitzem la forma d'ona ECG
+float p_wave = 0.0;
+float qrs_wave = 0.0;
+float t_wave = 0.0;
+
+// Paràmetres de la forma de l'ECG
+const float P_amp = 0.1;   // Amplitud de l'ona P
+const float QRS_amp = 1.0; // Amplitud del complex QRS
+const float T_amp = 0.3;   // Amplitud de l'ona T
+
+const float P_duration = 0.1;   // Durada de l'ona P (en segons)
+const float QRS_duration = 0.1; // Durada del complex QRS (en segons)
+const float T_duration = 0.2;   // Durada de l'ona T (en segons)
+
+// Temps i càlculs de les mostres
+float temps = 0.0;
+float tempsResp=0.0;
+float dt = 1.0 / fs;
+float rr_interval = 60.0 / heart_rate;  // Interval RR en segons
+float rr_variability = 0.05;  // Variabilitat en el temps RR (5% de variació)
+
+// Constants senyal respiració
+const float resp_freq = 0.25; // Hz (15 respiracions per minut)
+const float resp_ampl = 0.5;  // mV
+const float resp_offset = 3.0; // mV
+
+// Funció per generar una ona gaussiana per a les onades P, QRS i T
+float gaussian_wave(float t, float amplitude, float duration) {
+  return amplitude * exp(-0.5 * pow(t / (duration / 2.0), 2));
+}
+
+// Funció per simular el complex QRS amb una part negativa (Q i S)
+float qrs_wave_with_negatives(float t, float amplitude, float duration) {
+  // El complex QRS té una part negativa (Q i S)
+  float positive_peak = gaussian_wave(t, amplitude, duration / 2.0);  // Paret positiva
+  float negative_peak = gaussian_wave(t - duration / 2.0, -amplitude / 2.0, duration / 2.0); // Part negativa (Q i S)
+  
+  return positive_peak + negative_peak;
+}
+
+void sendLargeData(BLECharacteristic *pTxCharacteristic, const String& data) {
+  int dataLength = data.length();
+  
+  // Enviar les dades per fragments petits
+  for (int i = 0; i < dataLength; i += MAX_CHUNK_SIZE) {
+      String chunk = data.substring(i, i + MAX_CHUNK_SIZE);
+      pTxCharacteristic->setValue(chunk.c_str());
+      pTxCharacteristic->notify();  // O enviar l'escriptura
+      delay(20);  // Afegir un petit retard per evitar bloquejos
+  }
+}
+
+//paràmetres BLE
+bool deviceConnected = false;
+bool oldDeviceConnected = false;
+BLEServer *pServer = NULL;
+BLECharacteristic *pTxCharacteristic;
+
+class MyServerCallbacks: public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer){
+    deviceConnected = true;
+  };
+  void onDisconnect(BLEServer* pServer){
+    deviceConnected = false;
+  }
+};
+
+
+void setup() {
+  // Inicialització de la comunicació sèrie
+  Serial.begin(115200);
+  
+  // Inicialitzar la funció random
+  randomSeed(analogRead(0)); // Alimentem el generador de números aleatoris
+    
+  BLEDevice::init("ESP32-NeusMar");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+  pTxCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID,
+                          BLECharacteristic::PROPERTY_READ   |
+                          BLECharacteristic::PROPERTY_WRITE  |
+                          BLECharacteristic::PROPERTY_NOTIFY);
+  
+  pTxCharacteristic->addDescriptor(new BLE2902());
+  pService->start();
+
+  //Comença a fer advertising
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(false);
+  pAdvertising->setMinPreferred(0x0);
+  BLEDevice::startAdvertising();
+  Serial.println("waiting a client connection to notify...");
+  
+}
+
+
+void loop() {
+  unsigned long presentPeriod = micros();
+ // Serial.print("resta: ");
+  //Serial.println(presentPeriod-lastPeriod);
+  if ((presentPeriod-lastPeriod) >= samplingTime){
+ 
+    lastPeriod = presentPeriod;
+    
+    
+    // Calcular el senyal ECG com la suma de les ones P, QRS i T
+   
+    // Assignar les ones al cicle del cor (P, QRS, T)
+    // Ona P - Apareix abans del QRS
+    if (temps < P_duration)
+    p_wave = gaussian_wave(temps, P_amp, P_duration);
+    
+      // Complex QRS amb part negativa (Q i S)
+    if (temps >= P_duration && temps < P_duration + QRS_duration) {
+      qrs_wave = qrs_wave_with_negatives(temps - P_duration, QRS_amp, QRS_duration);
+    }
+
+    // Ona T - Apareix després del QRS
+    if (temps >= P_duration + QRS_duration && temps < P_duration + QRS_duration + T_duration) {
+      t_wave = gaussian_wave(temps - P_duration - QRS_duration, T_amp, T_duration);
+    }
+
+    // Senyal ECG com a suma de les onades P, QRS i T
+    ecg_buffer[nsamples] = p_wave + qrs_wave + t_wave;
+    Serial.print(ecg_buffer[nsamples]);
+    Serial.print("\t");
+    float resp_value = resp_offset + resp_ampl * sin(2 * PI * resp_freq * tempsResp);
+    resp_buffer[nsamples] = resp_value;
+    Serial.println(resp_buffer[nsamples]);
+    
+    // Incrementar el temps per al següent mostreig
+    temps += dt;
+    tempsResp +=dt;
+
+    // Crear string amb valors separats per comes
+    data += String(resp_buffer[nsamples], 2) + ",";
+    data += String(ecg_buffer[nsamples], 2) + ",";
+
+    // Afegir variabilitat al interval RR, ajustant el temps entre batec
+    rr_interval = 60.0 / heart_rate * (1 + random(-rr_variability * 100, rr_variability * 100) / 100.0);
+  
+    // Reiniciar el temps després d'un batec complet
+    if (temps >= rr_interval) {
+      temps = 0.0;
+      
+    }
+    nsamples++;
+
+
+  // Cada 1.5 minuts (cada ~90000 ms), afegeix valors SNS, PNS i estrès
+
+  if (millis() - last_sns_time > 90000) {
+    float sns = random(20, 70) / 10.0;
+    float pns = random(30, 80) / 10.0;
+    float stress = 10.0 - (pns - sns);  // valor inventat per simulació
+    data += String(sns, 1) + "," + String(pns, 1) + "," + String(stress, 1);
+    last_sns_time = millis();
+  } else {
+    data += "0.0,0.0,0.0";
+  }
+  }
+
+  if (nsamples = 50){
+    if (deviceConnected){
+      //sendLargeData(pTxCharacteristic,data);
+      pTxCharacteristic->setValue(data.c_str());
+      pTxCharacteristic->notify();
+      Serial.println("Dada enviada");
+      Serial.println(data);
+      Serial.print("nsamples: ");
+      Serial.println(nsamples);
+    }
+    
+    if(!deviceConnected && oldDeviceConnected){
+      delay(500);
+      pServer -> startAdvertising();
+      Serial.println("Start advertising");
+      oldDeviceConnected = deviceConnected;
+    }
+
+    if (deviceConnected && !oldDeviceConnected){
+      Serial.println("Imprimeixo alguna cosa");
+      oldDeviceConnected = deviceConnected;
+    }
+    
+    nsamples = 0;
+    p_wave = 0.0;
+    qrs_wave = 0.0;
+    t_wave = 0.0;
+    data = "";
+  }
+  
+}
