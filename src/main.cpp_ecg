@@ -3,6 +3,11 @@
 
 #define BAUD_RATIO 115200
 
+unsigned long temps_pic = 0;
+unsigned long array_temps_pic [100];
+int comptador_temps = 0;
+unsigned long intervals_RR [50];
+
 // Constants per simular l'ECG
 const float fs = 500.0;  // Frequència de mostreig (500 Hz)
 const float duration = 10.0; // Durada en segons
@@ -100,7 +105,7 @@ void loop() {
   float ecg_signal = p_wave + qrs_wave + t_wave;
 
   // Mostrar el senyal ECG pel monitor sèrie
-  Serial.println(ecg_signal);
+  //Serial.println(ecg_signal);
 
   // Incrementar el temps per al següent mostreig
   temps += dt;
@@ -121,7 +126,21 @@ void loop() {
 
   if(num_punts > 500){
     float pic_R = obtenir_pic_R(array_ecg_signal, 500); 
-    //Serial.println(pic_R);  // Utilitzem 'println' per saltar de línia després de imprimir el valor
+    temps_pic = millis();
+
+    if(comptador_temps < 100){
+    array_temps_pic [comptador_temps] = temps_pic;
+    comptador_temps++;
+    }
+    if(comptador_temps > 2){
+      for(int i = 1; i < comptador_temps; i++){
+        intervals_RR[i-1] = array_temps_pic[i] - array_temps_pic[i - 1];
+        Serial.println(intervals_RR[i-1]);
+      }
+    }
+    
+
+    //Serial.println(temps_pic);  // Utilitzem 'println' per saltar de línia després de imprimir el valor
     num_punts = 0;
   }
 
