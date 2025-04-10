@@ -12,21 +12,53 @@
 
 #define MAX_CHUNK_SIZE 20
 
+//NOSTRES DEFINICIONS
+#define DATA_LENGTH 20
+
 unsigned long lastPeriod = micros();
 
 //u_int16_t samplingTime =(1/SAMPLING_RATE)*1000000;  // temps de mostreig en milisegons
-unsigned long samplingTime =2000; //microsegons
-u_int32_t nsamples = 0; // compta el numero de mostres
-//const int bufferSize = 50; 
+unsigned long samplingTime=2000; //microsegons
 
 unsigned long last_sns_time = 0;
-float ecg_buffer[BUFFER_SIZE]; //buffer que emmagatzemarà les BUFFER_SIZE mostres d'ECG 
-float resp_buffer[BUFFER_SIZE];//buffer que emmagatzemarà les BUFFER_SIZE mostres de respiracio
-String data = ""; // string que conté les BUFFER_SIZE mostres d'ECG, respiració, SNS, PNS ibuffer SS, separats per comes i amb 2 decimals cadascú
+
+typedef struct {
+  float buffer[DATA_LENGTH]; // float que conté les BUFFER_SIZE mostres d'ECG/resp
+  int nsamples;
+} BufferDades;
+
+BufferDades crearBufferDades() {   // Retorna un BufferDades ja iniciat
+  BufferDades bd;
+  bd.nsamples = 0;
+  return bd;
+}
+
+// Creem els buffers de dades d'ECG i Respiració
+BufferDades dataECG = crearBufferDades();
+BufferDades dataResp = crearBufferDades();
+
+typedef struct {
+  float buffer[DATA_LENGTH + DATA_LENGTH + 3]; // float que conté les BUFFER_SIZE mostres d'ECG i respiració i una dada de SNS, PNS i stress
+  int nsamples;
+} BufferBLE;
+
+BufferBLE crearBufferBLE() {   // Retorna un BufferBLE ja iniciat
+  BufferBLE bd;
+  bd.nsamples = 0;
+  return bd;
+}
+
+BufferBLE dataTotal; // Variable que guarda totes les dades i el nombre de dades que conté
+
+// Inicialitzem els valors de sns, pns i stress
+float sns = 0.0;
+float pns = 0.0;
+float stress = 0.0;
+
 
 // Constants per simular l'ECG
-const float fs = 500.0;  // Frequència de mostreig (500 Hz)
-const float duration = 10.0; // Durada en segons
+const float fs = 500.0;         // Frequència de mostreig (500 Hz)
+const float duration = 10.0;    // Durada en segons
 const float heart_rate = 60.0;  // Ritme cardíac en BPM (batecs per minut)
 
 // inicialitzem la forma d'ona ECG
@@ -45,7 +77,7 @@ const float T_duration = 0.2;   // Durada de l'ona T (en segons)
 
 // Temps i càlculs de les mostres
 float temps = 0.0;
-float tempsResp=0.0;
+float tempsResp = 0.0;
 float dt = 1.0 / fs;
 float rr_interval = 60.0 / heart_rate;  // Interval RR en segons
 float rr_variability = 0.05;  // Variabilitat en el temps RR (5% de variació)
@@ -69,17 +101,35 @@ float qrs_wave_with_negatives(float t, float amplitude, float duration) {
   return positive_peak + negative_peak;
 }
 
-void sendLargeData(BLECharacteristic *pTxCharacteristic, const String& data) {
-  int dataLength = data.length();
-  
-  // Enviar les dades per fragments petits
-  for (int i = 0; i < dataLength; i += MAX_CHUNK_SIZE) {
-      String chunk = data.substring(i, i + MAX_CHUNK_SIZE);
-      pTxCharacteristic->setValue(chunk.c_str());
-      pTxCharacteristic->notify();  // O enviar l'escriptura
-      delay(20);  // Afegir un petit retard per evitar bloquejos
+void sendLargeData(BLECharacteristic *pTxCharacteristic, size_t bufferSize) {
+  // Dividir i enviar les dades per fragments petits
+  for (int i = 0; i < (DATA_LENGTH + DATA_LENGTH + 3); i++){
+    if(i < DATA_LENGTH){
+      // Afegir les dades ECG al buffer de dades
+      dataTotal.buffer[i] = dataECG.buffer[i];
+    }
+    else if(i < DATA_LENGTH + DATA_LENGTH){
+      for (int j = 0; j < DATA_LENGTH; j++){
+        // Afegir les DATA_LENGTH dades de respiració després de les d'ECG
+        dataTotal.buffer[i] = dataResp.buffer[j];
+      }
+    }
+    else{
+      // Afegir una dada de cada després de les de respiració
+      dataTotal.buffer[i] = sns;
+      dataTotal.buffer[i+1] = pns;
+      dataTotal.buffer[i+2] = stress;
+      break;
+    }
   }
+
+  // Utilitzar un punter de bytes per accedir a l'array de floats
+  // Enviar les dades com a bytes
+  pTxCharacteristic->setValue((uint8_t*)dataTotal.buffer, bufferSize);
+  pTxCharacteristic->notify();
+  Serial.println("Dada enviada");
 }
+
 
 //paràmetres BLE
 bool deviceConnected = false;
@@ -119,25 +169,19 @@ void setup() {
   //Comença a fer advertising
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setScanResponse(false);
-  pAdvertising->setMinPreferred(0x0);
+  pAdvertising->setScanResponse(true);
   BLEDevice::startAdvertising();
   Serial.println("waiting a client connection to notify...");
-  
 }
 
 
 void loop() {
   unsigned long presentPeriod = micros();
- // Serial.print("resta: ");
-  //Serial.println(presentPeriod-lastPeriod);
-  if ((presentPeriod-lastPeriod) >= samplingTime){
  
+  if ((presentPeriod-lastPeriod) >= samplingTime){
+    
     lastPeriod = presentPeriod;
     
-    
-    // Calcular el senyal ECG com la suma de les ones P, QRS i T
-   
     // Assignar les ones al cicle del cor (P, QRS, T)
     // Ona P - Apareix abans del QRS
     if (temps < P_duration)
@@ -153,74 +197,70 @@ void loop() {
       t_wave = gaussian_wave(temps - P_duration - QRS_duration, T_amp, T_duration);
     }
 
-    // Senyal ECG com a suma de les onades P, QRS i T
-    ecg_buffer[nsamples] = p_wave + qrs_wave + t_wave;
-    Serial.print(ecg_buffer[nsamples]);
-    Serial.print("\t");
+    // Generem mostres de cada senyal
+    float ecg_value = p_wave + qrs_wave + t_wave; // Senyal ECG com a suma de les onades P, QRS i T
     float resp_value = resp_offset + resp_ampl * sin(2 * PI * resp_freq * tempsResp);
-    resp_buffer[nsamples] = resp_value;
-    Serial.println(resp_buffer[nsamples]);
     
     // Incrementar el temps per al següent mostreig
     temps += dt;
     tempsResp +=dt;
-
-    // Crear string amb valors separats per comes
-    data += String(resp_buffer[nsamples], 2) + ",";
-    data += String(ecg_buffer[nsamples], 2) + ",";
-
     // Afegir variabilitat al interval RR, ajustant el temps entre batec
     rr_interval = 60.0 / heart_rate * (1 + random(-rr_variability * 100, rr_variability * 100) / 100.0);
   
     // Reiniciar el temps després d'un batec complet
     if (temps >= rr_interval) {
       temps = 0.0;
+    } 
+
+    // Afegir les mostres al buffer D'ecg
+    dataECG.buffer[dataECG.nsamples++] = ecg_value;
+    dataResp.buffer[dataResp.nsamples++] = resp_value;
+
+    /*
+    // Cada 1.5 minuts (cada ~90000 ms), afegeix valors SNS, PNS i estrès
+    if (millis() - last_sns_time > 90000) {
+      float sns = random(20, 70) / 10.0;
+      float pns = random(30, 80) / 10.0;
+      float stress = 10.0 - (pns - sns);  // valor inventat per simulació
+      data[nsamples] = sns;
+      data[nsamples + 1] = pns;
+      data[nsamples + 2] = stress;
+      last_sns_time = millis();
+    } else {
+      data[nsamples] = 0.0;
+      data[nsamples + 1] = 0.0;
+      data[nsamples + 2] = 0.0;
+    }
+    nsamples = nsamples + 3;
+    }*/
+
+    if (DATA_LENGTH == dataECG.nsamples){
+      Serial.println("DATA_LENGTH == dataECG.nsamples");
+      if (deviceConnected){
+        // Calcular la mida del buffer en bytes
+        size_t bufferSize = sizeof(dataTotal.buffer);
+
+        // Enviar les dades per BLE
+        sendLargeData(pTxCharacteristic , bufferSize);
+      }
+
+      if(!deviceConnected && oldDeviceConnected){
+        delay(500);
+        pServer -> startAdvertising();
+        oldDeviceConnected = deviceConnected;
+      }
+
+      if (deviceConnected && !oldDeviceConnected){
+        oldDeviceConnected = deviceConnected;
+      }
       
+      p_wave = 0.0;
+      qrs_wave = 0.0;
+      t_wave = 0.0;
+      
+      dataECG.nsamples = 0;
+      dataResp.nsamples = 0;
+      dataTotal.nsamples = 0;
     }
-    nsamples++;
-
-
-  // Cada 1.5 minuts (cada ~90000 ms), afegeix valors SNS, PNS i estrès
-
-  if (millis() - last_sns_time > 90000) {
-    float sns = random(20, 70) / 10.0;
-    float pns = random(30, 80) / 10.0;
-    float stress = 10.0 - (pns - sns);  // valor inventat per simulació
-    data += String(sns, 1) + "," + String(pns, 1) + "," + String(stress, 1);
-    last_sns_time = millis();
-  } else {
-    data += "0.0,0.0,0.0";
   }
-  }
-
-  if (nsamples = 50){
-    if (deviceConnected){
-      //sendLargeData(pTxCharacteristic,data);
-      pTxCharacteristic->setValue(data.c_str());
-      pTxCharacteristic->notify();
-      Serial.println("Dada enviada");
-      Serial.println(data);
-      Serial.print("nsamples: ");
-      Serial.println(nsamples);
-    }
-    
-    if(!deviceConnected && oldDeviceConnected){
-      delay(500);
-      pServer -> startAdvertising();
-      Serial.println("Start advertising");
-      oldDeviceConnected = deviceConnected;
-    }
-
-    if (deviceConnected && !oldDeviceConnected){
-      Serial.println("Imprimeixo alguna cosa");
-      oldDeviceConnected = deviceConnected;
-    }
-    
-    nsamples = 0;
-    p_wave = 0.0;
-    qrs_wave = 0.0;
-    t_wave = 0.0;
-    data = "";
-  }
-  
 }
