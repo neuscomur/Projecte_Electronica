@@ -9,11 +9,18 @@
 #define CHARACTERISTIC_UUID "7a6ffc80-ef27-4a4d-a8a6-56d93f8feff3"
 #define BUFFER_SIZE 50
 #define SAMPLING_RATE 500
+#define NUM_MOSTRES 120 //2min * 60s * 1mostra/s (aprox) = 120
 
 #define MAX_CHUNK_SIZE 20
 
 //NOSTRES DEFINICIONS
 #define DATA_LENGTH 20
+#define MAX_DADES_CALCULS 500
+
+unsigned long temps_pic = 0;
+unsigned long array_temps_pic [NUM_MOSTRES];
+int comptador_temps = 0;
+unsigned long intervals_RR [NUM_MOSTRES];
 
 unsigned long lastPeriod = micros();
 
@@ -48,7 +55,20 @@ BufferBLE crearBufferBLE() {   // Retorna un BufferBLE ja iniciat
   return bd;
 }
 
-BufferBLE dataTotal; // Variable que guarda totes les dades i el nombre de dades que conté
+BufferBLE dataTotal = crearBufferBLE(); // Variable que guarda totes les dades i el nombre de dades que conté
+
+typedef struct {
+  float buffer[MAX_DADES_CALCULS]; // float que conté les BUFFER_SIZE mostres d'ECG i respiració i una dada de SNS, PNS i stress
+  int nsamples;
+} BufferCalculs;
+
+BufferCalculs crearBufferCalculs() {   // Retorna un BufferCalculs ja iniciat, aquest servirà per guardar les dades i fer càlculs
+  BufferCalculs bd;
+  bd.nsamples = 0;
+  return bd;
+}
+
+BufferCalculs array_ECG_Calculs = crearBufferCalculs();
 
 // Inicialitzem els valors de sns, pns i stress
 float sns = 0.0;
@@ -86,6 +106,8 @@ float rr_variability = 0.05;  // Variabilitat en el temps RR (5% de variació)
 const float resp_freq = 0.25; // Hz (15 respiracions per minut)
 const float resp_ampl = 0.5;  // mV
 const float resp_offset = 3.0; // mV
+
+int n_punts = 0;
 
 // Funció per generar una ona gaussiana per a les onades P, QRS i T
 float gaussian_wave(float t, float amplitude, float duration) {
@@ -145,6 +167,29 @@ class MyServerCallbacks: public BLEServerCallbacks {
     deviceConnected = false;
   }
 };
+
+float obtenir_pic_R(float* senyal, int mida){
+
+  int comptador = 0; //Comptador de quants pics trobem
+  float pics_R[10] = {0};
+
+  //bucle per trobar màxims
+  for (int i = 1; i < mida - 1; i++) {
+    if (senyal[i] > senyal[i - 1] && senyal[i] > senyal[i + 1]) {
+      pics_R[comptador] = senyal[i];
+      comptador++;
+    }
+  }
+
+  //Obtenir pic màxim del senyal
+  float pic_max = pics_R[0];
+  for (int i = 1; i < comptador; i++) {
+    if (pics_R[i] > pic_max) {
+      pic_max = pics_R[i];
+    }
+  }
+  return pic_max;
+}
 
 
 void setup() {
@@ -214,6 +259,14 @@ void loop() {
 
     // Afegir les mostres al buffer D'ecg
     dataECG.buffer[dataECG.nsamples++] = ecg_value;
+
+    if(dataECG.nsamples == DATA_LENGTH){
+      for (int i = 0; i < 20; i++){
+        array_ECG_Calculs.buffer[array_ECG_Calculs.nsamples] = dataECG.buffer[i];
+        array_ECG_Calculs.nsamples++;
+      }
+    }
+
     dataResp.buffer[dataResp.nsamples++] = resp_value;
 
     /*
@@ -234,14 +287,45 @@ void loop() {
     nsamples = nsamples + 3;
     }*/
 
+      //--------------------------------------------------------------------------
+
+  // obtenir pic de la ona R
+  
+  // Guarda fins a 500 punts, quan arriba a 500 entra
+  if(array_ECG_Calculs.nsamples >= 500){
+    // Obtenir el pic R de les 500 mostres
+    float pic_R = obtenir_pic_R(array_ECG_Calculs.buffer, 500); 
+    // Obtenir el temps en milisegons on hi ha el pic R
+    temps_pic = millis();
+    
+    //COMPROVAR TEMA INTERVALS############################################################
+
+    // Quan no tenim prous temps guardats a l'array
+    if(comptador_temps < 10){ // 2min*60s = 120 mostres
+      // Guardem la variable dins un array
+      array_temps_pic [comptador_temps] = temps_pic;
+      comptador_temps++;
+      Serial.println(comptador_temps);
+    }
+    else{// Si tenim prous elements guardats a l'array
+      for(int i = 1; i < comptador_temps; i++){
+        // Calculem els intervals de temps entre els pics R-R
+        intervals_RR[i-1] = array_temps_pic[i] - array_temps_pic[i - 1];
+        Serial.println(intervals_RR[i-1]);
+      }
+    }
+    Serial.println(temps_pic);  // Utilitzem 'println' per saltar de línia després de imprimir el valor
+    array_ECG_Calculs.nsamples = 0;
+  }
+
     if (DATA_LENGTH == dataECG.nsamples){
-      Serial.println("DATA_LENGTH == dataECG.nsamples");
       if (deviceConnected){
         // Calcular la mida del buffer en bytes
         size_t bufferSize = sizeof(dataTotal.buffer);
 
         // Enviar les dades per BLE
         sendLargeData(pTxCharacteristic , bufferSize);
+        Serial.println("Dades enviades");
       }
 
       if(!deviceConnected && oldDeviceConnected){
