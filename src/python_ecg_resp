@@ -8,8 +8,8 @@ SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 CHARACTERISTIC_UUID = "7a6ffc80-ef27-4a4d-a8a6-56d93f8feff3"
 
 # Replace with your ESP32 device name or address
-DEVICE_NAME = "ESP32-NeusMar"
-ADRESS = "84:CC:A8:37:9B:62"
+DEVICE_NAME = "NeusFuncionaOk"
+ADRESS = "30:AE:A4:62:FB:0E"
 
 # Variables globales
 window_size = 100  # Tamaño máximo de la ventana de datos

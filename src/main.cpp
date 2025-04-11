@@ -6,12 +6,12 @@
 using namespace std;
 
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"  // https://www.uuidgenerator.net/
-#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define CHARACTERISTIC_UUID "7a6ffc80-ef27-4a4d-a8a6-56d93f8feff3"
 
 void setup(){
   Serial.begin(115200);
   Serial.println("Iniciant BLE...");
-  BLEDevice::init("Neus");
+  BLEDevice::init("NeusFuncionaOk");
   BLEServer *pServer = BLEDevice::createServer();
   BLEService *pService = pServer->createService(SERVICE_UUID);
   BLECharacteristic *pCharacteristic = pService->createCharacteristic(
