@@ -1,5 +1,6 @@
 ///Codi per simular un senyal ECG
 #include <Arduino.h>
+#include <InterpolationLib.h>
 
 #define BAUD_RATIO 115200
 
@@ -120,30 +121,73 @@ void loop() {
 
   //--------------------------------------------------------------------------
 
-  // obtenir pic de la ona R
+  // El nombre d'intervals RR sempre serà un menys que el nombre de pics R
+
+
+
+  /////////// obtenir pic de la ona R ////////////////////////////////////////////////
+
+  // Desa el valor actual del senyal ECG (`ecg_signal`) a l'array `array_ecg_signal` en la posició `num_punts`.
   array_ecg_signal[num_punts] = ecg_signal;
+  // Incrementem el comptador de punts R recollits
   num_punts++;
 
+
+  // Quan ja tenim més de 500 mostres del senyal ECG, podem començar a treballar amb aquest
   if(num_punts > 500){
     float pic_R = obtenir_pic_R(array_ecg_signal, 500); 
+    //  Guarda el temps actual en mil·lisegons des de l'inici del programa (funció `millis()` d’Arduino), que ens diu quan ha passat el pic R.
     temps_pic = millis();
 
     if(comptador_temps < 100){
-    array_temps_pic [comptador_temps] = temps_pic;
-    comptador_temps++;
+    array_temps_pic [comptador_temps] = temps_pic; // Desa el temps del pic R a l'array
+    comptador_temps++; // Incrementem el comptador de pics R detectats
     }
+    //  Si ja hem obtingut almenus 3 pics R detectats, podem començar amb el càlcul els intervals R-R (diferències de temps entre dos pics R consecutius).
     if(comptador_temps > 2){
-      for(int i = 1; i < comptador_temps; i++){
-        intervals_RR[i-1] = array_temps_pic[i] - array_temps_pic[i - 1];
-        Serial.println(intervals_RR[i-1]);
-      }
-    }
-    
 
+      int num_rr = comptador_temps - 1; // Nombre d'intervals R-R = nombre de pics R - 1
+
+      float x_vals[100]; // Índexs (0, 1, 2, ...) per a poder realitzar més endavant la interpolació
+      float y_vals[100]; // Valors dels intervals R-R originals (en mil·lisegons)
+      float rr_interpolats[200]; // Array on desarem els valors interpolats
+      int num_interpolats = 0; // Comptador de valors interpolats
+
+      //for(int i = 1; i < comptador_temps; i++){
+        //intervals_RR[i-1] = array_temps_pic[i] - array_temps_pic[i - 1]; // Calcula l'interval R-R
+        //Serial.println(intervals_RR[i-1]);
+
+
+
+        //x_vals[i-1] = (float)(i - 1); // Posició (X) per interpolació
+        //y_vals[i-1] = (float)intervals_RR[i-1] / 1000.0; // Converteix els intervals dels pics R-R de mil·lisegons a segons per fer la interpolació (Y)
+      //}
+
+///////////////// INTERPOL·LACIÓ DELS INTERVALS R-R ////////////////////////////////////////////
+float temps_acumulat = 0;
+
+for(int i = 1; i < comptador_temps; i++){
+  float rr_s = (float) (array_temps_pic[i] - array_temps_pic[i - 1]) / 1000.0; // ms → s
+  intervals_RR[i-1] = rr_s * 1000.0; // Guardem la seq d'intervals R-R original en ms (per si la necessitem)
+  Serial.println(rr_s * 1000.0); // Mostrem en mil·lisegons
+
+  temps_acumulat += rr_s; // Temps real acumulat en segons
+  x_vals[i-1] = temps_acumulat; // Temps real (eix X)
+  y_vals[i-1] = rr_s; // Valor R-R en segons (eix Y)
+}
+
+float pas = 0.25; // Pas d'interpolació en segons (0.25s trets del PPoint)
+for (float i = x_vals[0]; i < x_vals[num_rr - 1]; i += pas) {
+  rr_interpolats[num_interpolats] = Interpolation::Linear(x_vals, y_vals, num_rr, i, true);
+  Serial.println(rr_interpolats[num_interpolats]); // Mostra valor interpolat
+  num_interpolats++;
+}
     //Serial.println(temps_pic);  // Utilitzem 'println' per saltar de línia després de imprimir el valor
+    // Reinicialitzem el comptador de punts per a tornar a agafar un fragment de 500 mostres
     num_punts = 0;
   }
 
   // Retard per ajustar la freqüència de mostreig
+  // Un cop s’ha processat el bloc de 500 punts, es reinicia el comptador per començar a omplir l’array de nou amb noves mostres.
   delay(1000 / fs);
 }
